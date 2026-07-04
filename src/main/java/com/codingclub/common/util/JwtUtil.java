@@ -5,6 +5,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -22,8 +23,17 @@ public class JwtUtil {
     @Value("${jwt.expiration-ms:86400000}")
     private long expirationTime;
 
+    // OPTIMIZED: Cache the derived signing key — derived once at startup,
+    // not re-computed on every single token parse/validate call.
+    private Key cachedSigningKey;
+
+    @PostConstruct
+    public void init() {
+        this.cachedSigningKey = Keys.hmacShaKeyFor(secret.getBytes());
+    }
+
     private Key getSigningKey() {
-        return Keys.hmacShaKeyFor(secret.getBytes());
+        return cachedSigningKey;
     }
 
     public String extractUserId(String token) {
@@ -44,7 +54,11 @@ public class JwtUtil {
     }
 
     public Claims extractAllClaims(String token) {
-        return Jwts.parserBuilder().setSigningKey(getSigningKey()).build().parseClaimsJws(token).getBody();
+        return Jwts.parserBuilder()
+                .setSigningKey(getSigningKey())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
     }
 
     private Boolean isTokenExpired(String token) {
@@ -90,7 +104,9 @@ public class JwtUtil {
 
     public Boolean validateToken(String token) {
         try {
-            return !isTokenExpired(token);
+            // OPTIMIZED: parse once — avoids double parse (extractExpiration calls extractAllClaims)
+            Claims claims = extractAllClaims(token);
+            return !claims.getExpiration().before(new Date());
         } catch (Exception e) {
             return false;
         }
